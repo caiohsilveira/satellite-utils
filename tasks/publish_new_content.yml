@@ -1,7 +1,7 @@
 ---
 - name: "publish_new_content | Publish new content view (Dev/Lib)"
   failed_when: false
-  loop: "{{ sat6_content_views }}"
+  loop: "{{ sat_content_views }}"
   loop_control:
     pause: 30
   register: pub_output
@@ -9,7 +9,7 @@
     server_url: "{{ satellite_server_url }}"
     validate_certs: false
     username: "{{ satellite_username }}"
-    password: "{{ satellite_password }}"  
+    password: "{{ satellite_password }}"
     content_view: "{{ item }}"
     organization: "{{ satellite_organization }}"
     lifecycle_environments:
@@ -20,7 +20,7 @@
 
 - name: "publish_new_content | Promote Test content view (Test)"
   failed_when: false
-  loop: "{{ sat6_content_views }}"
+  loop: "{{ sat_content_views }}"
   loop_control:
     pause: 30
   register: pub_output
@@ -28,7 +28,7 @@
     server_url: "{{ satellite_server_url }}"
     validate_certs: false
     username: "{{ satellite_username }}"
-    password: "{{ satellite_password }}"  
+    password: "{{ satellite_password }}"
     content_view: "{{ item }}"
     organization: "{{ satellite_organization }}"
     current_lifecycle_environment: "Development"
@@ -39,7 +39,7 @@
 
 - name: "publish_new_content | Promote Production content view (Prod)"
   failed_when: false
-  loop: "{{ sat6_content_views }}"
+  loop: "{{ sat_content_views }}"
   loop_control:
     pause: 30
   register: pub_output
@@ -47,7 +47,7 @@
     server_url: "{{ satellite_server_url }}"
     validate_certs: false
     username: "{{ satellite_username }}"
-    password: "{{ satellite_password }}"  
+    password: "{{ satellite_password }}"
     content_view: "{{ item }}"
     organization: "{{ satellite_organization }}"
     current_lifecycle_environment: "Test"
@@ -58,14 +58,14 @@
 
 - name: "publish_new_content | Publish new content view for capsules"
   failed_when: false
-  register: pub_output_capsules  
+  register: pub_output_capsules
   redhat.satellite.content_view_version:
     server_url: "{{ satellite_server_url }}"
     validate_certs: false
     username: "{{ satellite_username }}"
     password: "{{ satellite_password }}"
     content_view: "cv_capsules"
-    organization: "hybrid_cloud"
+    organization: "my_capsules_org"
     lifecycle_environments:
       - Library
   tags: test

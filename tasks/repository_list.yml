@@ -12,6 +12,5 @@
 
 - name: "repository_list | Append results to result_values"
   ansible.builtin.set_fact:
-    #result_values: "{{ result_values | default([]) + repositories_response.json.results | json_query('[].{content_label: content_label, result: last_sync.result}') }}"
     result_values: "{{ result_values | default([]) + repositories_response.json.results | json_query('[].{label: label, result: last_sync.result}') }}"
     current_page: "{{ current_page | int + 1 }}"
