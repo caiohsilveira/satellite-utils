@@ -1,0 +1,23 @@
+---
+- name: "cleanup_content_views | [BLOCK] Cleanup in SomeOrganization"
+  block:
+    - name: "cleanup_content_views | Clean up old content views"
+      vars:
+        satellite_organization: "{{ some_organization }}"
+        satellite_validate_certs: false
+        satellite_content_view_version_cleanup_keep: "{{ keep_for_some_organization }}"
+      ansible.builtin.import_role:
+        name: redhat.satellite.content_view_version_cleanup
+
+    - name: "cleanup_content_views | Send message at slack"
+      when: slack_token is defined
+      community.general.slack:
+        token: "{{ slack_token }}"
+        msg: "*:ansiblered: Cleanup content_views successfully completed*"
+
+  rescue:
+    - name: "cleanup_content_views | Send message at slack"
+      when: slack_token is defined
+      community.general.slack:
+        token: "{{ slack_token }}"
+        msg: "*:ansiblered: Cleanup content_views failed :red_circle:*"

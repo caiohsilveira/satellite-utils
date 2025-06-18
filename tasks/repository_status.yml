@@ -1,0 +1,38 @@
+---
+- name: "repository_status | Retrieve total number of pages"
+  ansible.builtin.uri:
+    url: "{{ satellite_server_url }}katello/api/repositories?organization_id={{ org_id }}"
+    method: GET
+    user: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    force_basic_auth: true
+    status_code: 200
+    validate_certs: false
+  register: total_pages_response
+
+- name: "repository_status | Set total_pages"
+  ansible.builtin.set_fact:
+    total_pages: "{{ (total_pages_response.json.total / 20) | int }}"
+
+- name: "repository_status | Start task loop"
+  loop: "{{ range(1, total_pages | int + 2) | list }}"
+  ansible.builtin.include_tasks:
+    file: ./repository_list.yml
+
+- name: "repository_status | Show list"
+  ansible.builtin.debug:
+    msg: "{{ result_values }}"
+
+- name: "repository_status | Send message at slack"
+  register: error_message
+  when: result_values | selectattr('result', 'ne', 'success') | list | length > 0
+  changed_when: result_values | selectattr('result', 'ne', 'success') | list | length > 0
+  community.general.slack:
+    token: "{{ slack_token }}"
+    msg: ":failed: There was an error synchronizing the repositories: {{ (result_values | selectattr('result', 'ne', 'success') | map(attribute='label') | list) | join(', ') }}"
+
+- name: "repository_status | Send message at slack"
+  when: not error_message.changed
+  community.general.slack:
+    token: "{{ slack_token }}"
+    msg: ":ansiblered: *Checking synchronized repositories*\n All repositories are synchronized. :large_green_circle:"

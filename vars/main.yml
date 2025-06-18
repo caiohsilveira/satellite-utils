@@ -1,0 +1,28 @@
+---
+# Satellite collection default vars
+satellite_server_url: "{{ ui_satellite_server_url | default('https://my-satellite.domain.com/') }}"
+satellite_username: "{{ ui_satellite_username | default('apiuser') }}"
+satellite_password: "{{ ui_satellite_password | default(satellite_password_vault) }}"
+satellite_password_vault: <removed>
+
+# Organization name / ID
+satellite_organization: "{{ ui_satellite_organization | default('some_organization') }}"
+org_id: "{{ ui_org_id | default('1') }}"
+
+# Content_view Cleanup task (cleanup_content_views.yml)
+keep_for_some_organization: "{{ ui_keep_cv | default(3) }}"
+
+# Content Views
+sat_content_views:
+  - 'redhat-7-ppc64le'
+  - 'redhat-7-s390x'
+  - 'redhat-7-x86_64'
+  - 'redhat-8-x86_64'
+  - 'redhat-8-ppc64le'
+  - 'redhat-8-s390x'
+  - 'redhat-9-x86_64'
+  - 'redhat-9-ppc64le'
+  - 'redhat-9-s390x'
+  - 'redhat-10-x86_64'
+  - 'redhat-10-ppc64le'
+  - 'redhat-10-s390x'

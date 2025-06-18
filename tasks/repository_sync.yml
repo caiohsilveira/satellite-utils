@@ -1,0 +1,12 @@
+---
+- name: "repository_sync | Sync all repositories"
+  failed_when: false
+  when: ui_sat_products is defined
+  with_items: "{{ ui_sat_products.splitlines() }}"
+  redhat.satellite.repository_sync:
+    server_url: "{{ satellite_server_url }}"
+    validate_certs: false
+    username: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    organization: "{{ satellite_organization }}"
+    product: "{{ item }}"

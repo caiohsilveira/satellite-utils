@@ -1,0 +1,17 @@
+---
+- name: "repository_list | List repositories from Red Hat Satellite page {{ current_page }}"
+  ansible.builtin.uri:
+    url: "{{ satellite_server_url }}katello/api/repositories?organization_id={{ org_id }}&page={{ current_page }}"
+    method: GET
+    user: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    force_basic_auth: true
+    status_code: 200
+    validate_certs: false
+  register: repositories_response
+
+- name: "repository_list | Append results to result_values"
+  ansible.builtin.set_fact:
+    #result_values: "{{ result_values | default([]) + repositories_response.json.results | json_query('[].{content_label: content_label, result: last_sync.result}') }}"
+    result_values: "{{ result_values | default([]) + repositories_response.json.results | json_query('[].{label: label, result: last_sync.result}') }}"
+    current_page: "{{ current_page | int + 1 }}"
