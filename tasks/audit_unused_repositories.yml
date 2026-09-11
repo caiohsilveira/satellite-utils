@@ -1,0 +1,250 @@
+---
+# audit_unused_repositories.yml
+#
+# Purpose: Identifies repositories that are enabled in Content Views but not
+#          enabled on any registered host — candidates for cleanup.
+#
+# Strategy:
+#   1. Collect all repositories present in all Content Views
+#   2. Collect all registered hosts
+#   3. For each host, query enabled repos via Satellite API
+#   4. Cross-reference: repos in CVs that are not enabled on any host
+#   5. Enrich with full metadata and write JSON report
+#
+# Variables (defined in vars/main.yml, overridable via ui_ survey vars):
+#   satellite_server_url, satellite_username, satellite_password,
+#   satellite_organization
+#
+# Optional overrides:
+#   ui_report_output_dir  - output path for the JSON report (default: /tmp)
+
+- name: "audit_unused_repositories | Set defaults"
+  ansible.builtin.set_fact:
+    _report_output_dir: "{{ ui_report_output_dir | default('/tmp') }}"
+    _per_page: 100
+    _failed_hosts: []
+
+# ------------------------------------------------------------------ #
+# 1. Collect repositories from all Content Views
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | Initialize CV repo ID list"
+  ansible.builtin.set_fact:
+    _cv_repo_ids: []
+
+- name: "audit_unused_repositories | List all Content Views"
+  redhat.satellite.content_view_info:
+    server_url: "{{ satellite_server_url }}"
+    username: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    validate_certs: false
+    organization: "{{ satellite_organization }}"
+  register: _cv_info_result
+
+- name: "audit_unused_repositories | Build flat list of repository IDs from all Content Views"
+  ansible.builtin.set_fact:
+    _cv_repo_ids: >-
+      {{
+        _cv_repo_ids | union(
+          item.repositories | default([]) | map(attribute='id') | list
+        )
+      }}
+  loop: "{{ _cv_info_result.content_views | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "audit_unused_repositories | Show CV repository count"
+  ansible.builtin.debug:
+    msg: >-
+      Found {{ _cv_repo_ids | length }} unique repositories across
+      {{ _cv_info_result.content_views | default([]) | length }} Content Views.
+
+# ------------------------------------------------------------------ #
+# 2. Collect all registered hosts
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | List all registered hosts"
+  redhat.satellite.host_info:
+    server_url: "{{ satellite_server_url }}"
+    username: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    validate_certs: false
+    organization: "{{ satellite_organization }}"
+    search: "organization = {{ satellite_organization }}"
+  register: _hosts_result
+
+- name: "audit_unused_repositories | Store host list"
+  ansible.builtin.set_fact:
+    _all_hosts: "{{ _hosts_result.hosts | default([]) }}"
+    _host_enabled_repo_ids: []
+
+- name: "audit_unused_repositories | Show host count"
+  ansible.builtin.debug:
+    msg: "Found {{ _all_hosts | length }} hosts to query."
+
+# ------------------------------------------------------------------ #
+# 3. Query enabled repositories per host via Satellite API
+#    GET /api/hosts/:id/subscriptions/enabled_repos
+#    (no redhat.satellite module covers this endpoint)
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | Query enabled repositories for each host"
+  ansible.builtin.uri:
+    url: "{{ satellite_server_url }}api/hosts/{{ item.id }}/subscriptions/enabled_repositories?per_page={{ _per_page }}"
+    method: GET
+    user: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+    status_code: [200, 400, 404]
+  register: _host_repos_results
+  failed_when: false
+  loop: "{{ _all_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "audit_unused_repositories | Aggregate all enabled repository IDs across hosts"
+  ansible.builtin.set_fact:
+    _host_enabled_repo_ids: >-
+      {{
+        _host_enabled_repo_ids | union(
+          item.json.results
+          | default([])
+          | map(attribute='library_instance_id')
+          | list
+        )
+      }}
+  loop: "{{ _host_repos_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('unknown') }}"
+  when: item.status == 200 and item.json is defined
+
+- name: "audit_unused_repositories | Collect hosts that failed the enabled repositories query"
+  ansible.builtin.set_fact:
+    _failed_hosts: >-
+      {{
+        _failed_hosts + [{
+          'id': item.item.id,
+          'name': item.item.name,
+          'error': item.json.displayMessage | default(item.json.errors | default(['unknown']) | first)
+        }]
+      }}
+  loop: "{{ _host_repos_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('unknown') }}"
+  when: item.status != 200
+
+- name: "audit_unused_repositories | Show enabled repo count across all hosts"
+  ansible.builtin.debug:
+    msg: >-
+      Found {{ _host_enabled_repo_ids | length }} unique repositories
+      enabled across all hosts.
+
+# ------------------------------------------------------------------ #
+# 4. Cross-reference
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | Compute unused repository IDs"
+  ansible.builtin.set_fact:
+    _unused_repo_ids: "{{ _cv_repo_ids | difference(_host_enabled_repo_ids) | list }}"
+    _report_entries: []
+
+# ------------------------------------------------------------------ #
+# 5. Enrich unused repos with full metadata
+#    GET /katello/api/repositories/:id
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | Fetch full metadata for each unused repository"
+  ansible.builtin.uri:
+    url: "{{ satellite_server_url }}katello/api/repositories/{{ item }}"
+    method: GET
+    user: "{{ satellite_username }}"
+    password: "{{ satellite_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+    status_code: [200, 404]
+  register: _unused_repos_meta
+  loop: "{{ _unused_repo_ids }}"
+  loop_control:
+    label: "repo id {{ item }}"
+  when: _unused_repo_ids | length > 0
+
+- name: "audit_unused_repositories | Build enriched report list"
+  ansible.builtin.set_fact:
+    _report_entries: >-
+      {%- set entries = [] -%}
+      {%- for r in (_unused_repos_meta.results | default([])) -%}
+        {%- if r.status == 200 and r.json is defined -%}
+          {%- set repo = r.json -%}
+          {%- set _ = entries.append({
+            'id': repo.id,
+            'name': repo.name,
+            'label': repo.label | default(''),
+            'product': repo.product.name | default(''),
+            'content_type': repo.content_type | default(''),
+            'url': repo.url | default(''),
+            'last_sync': repo.last_sync_words | default('never')
+          }) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ entries }}
+  when: _unused_repo_ids | length > 0
+
+# ------------------------------------------------------------------ #
+# 6. Report
+# ------------------------------------------------------------------ #
+- name: "audit_unused_repositories | Print console summary"
+  ansible.builtin.debug:
+    msg:
+      - "========================================================"
+      - "    SATELLITE — UNUSED REPOSITORY AUDIT SUMMARY"
+      - "========================================================"
+      - "Organization             : {{ satellite_organization }}"
+      - "Satellite URL            : {{ satellite_server_url }}"
+      - "Repos in CVs             : {{ _cv_repo_ids | length }}"
+      - "Repos on any host        : {{ _host_enabled_repo_ids | length }}"
+      - "Unused candidates        : {{ _unused_repo_ids | length }}"
+      - "Failed hosts             : {{ _failed_hosts | length }}"
+      - "========================================================"
+
+- name: "audit_unused_repositories | Print unused repositories"
+  ansible.builtin.debug:
+    msg: "[UNUSED REPO] id={{ item.id }} | {{ item.product }} / {{ item.name }} (last sync: {{ item.last_sync }})"
+  loop: "{{ _report_entries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _report_entries | length > 0
+
+- name: "audit_unused_repositories | Print failed hosts"
+  ansible.builtin.debug:
+    msg: "[UNREGISTERED HOST] id={{ item.id }} | {{ item.name }} — {{ item.error }}"
+  loop: "{{ _failed_hosts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _failed_hosts | length > 0
+
+- name: "audit_unused_repositories | Set report filename"
+  ansible.builtin.set_fact:
+    _report_filename: >-
+      satellite-unused-repos-{{ satellite_organization | lower | replace(' ', '_') }}-{{ now(utc=true, fmt='%Y-%m-%d') }}
+
+- name: "audit_unused_repositories | Write JSON report"
+  ansible.builtin.copy:
+    content: |
+      {{ {
+        'generated_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+        'organization': satellite_organization,
+        'satellite_url': satellite_server_url,
+        'summary': {
+          'repos_in_content_views': _cv_repo_ids | length,
+          'repos_enabled_on_hosts': _host_enabled_repo_ids | length,
+          'unused_candidates': _unused_repo_ids | length,
+          'failed_hosts': _failed_hosts | length
+        },
+        'unused_repositories': _report_entries,
+        'failed_hosts': _failed_hosts
+      } | to_nice_json }}
+    dest: "{{ _report_output_dir }}/{{ _report_filename }}.json"
+    mode: "0640"
+  changed_when: false
+
+- name: "audit_unused_repositories | Report saved"
+  ansible.builtin.debug:
+    msg: "Report saved to: {{ _report_output_dir }}/{{ _report_filename }}.json"
